@@ -130,6 +130,22 @@ void act_apply(void) {
 	// determine whether changes are needed before initiating output configuration
 	f.val = (fn_pred_p)head_current_not_desired;
 	for (const struct PPmapIt *it = ppmap_filter_it(g_displ->heads, f); it; it = ppmap_it_next(it)) {
+		struct Head *head = (struct Head*)it->val;
+
+		// A compositor may report a configuration as applied while changing
+		// nothing: sway does this for a head whose output it has powered off,
+		// which keeps reporting itself disabled with no mode. Re-applying an
+		// identical configuration against identical state achieves nothing and
+		// spins at the speed of the event loop, so wait for the state to move.
+		if (head_apply_ignored(head)) {
+			if (!head->warned_apply_ignored) {
+				head->warned_apply_ignored = true;
+				log_warn(NULL);
+				log_warn("%s: configuration applied without effect, waiting for the display state to change", head_human(head));
+			}
+			continue;
+		}
+
 		ppmap_put(heads_changing, it->key, it->val);
 	}
 
@@ -160,6 +176,8 @@ void act_apply(void) {
 
 		head->reapply_required = false;
 
+		head_applied(head);
+
 		goto apply;
 	}
 
@@ -179,6 +197,8 @@ void act_apply(void) {
 
 		g_displ->delta.human = delta_human_mode(head);
 
+		head_applied(head);
+
 		goto apply;
 	}
 
@@ -197,6 +217,8 @@ void act_apply(void) {
 		_zwlr_output_configuration_head_v1_set_adaptive_sync(head->zconfig, head->des.adaptive_sync);
 
 		g_displ->delta.human = delta_human_adaptive_sync(head);
+
+		head_applied(head);
 
 		goto apply;
 	}
@@ -219,6 +241,8 @@ void act_apply(void) {
 			} else {
 				_zwlr_output_configuration_v1_disable_head(zconfig, (void*)it->key);
 			}
+
+			head_applied(head);
 		}
 
 		g_displ->delta.human = delta_human(heads_changing);

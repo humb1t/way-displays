@@ -315,6 +315,17 @@ bool head_name_desc_matches_head(const char * const name_desc, const struct Head
 	return head_matches_name_desc(head, name_desc);
 }
 
+void head_applied(struct Head * const head) {
+	if (!head) {
+		return;
+	}
+
+	head->applied = true;
+	head->applied_cur = head->cur;
+	head->applied_des = head->des;
+	head->warned_apply_ignored = false;
+}
+
 bool head_current_not_desired(const struct Head * const head) {
 	return (head &&
 			(head->reapply_required ||
@@ -325,6 +336,25 @@ bool head_current_not_desired(const struct Head * const head) {
 			 head->des.y != head->cur.y ||
 			 head->des.transform != head->cur.transform ||
 			 head->des.adaptive_sync != head->cur.adaptive_sync));
+}
+
+static bool head_state_equal(const struct HeadState * const a, const struct HeadState * const b) {
+	return (a->zmode == b->zmode &&
+			a->scale == b->scale &&
+			a->enabled == b->enabled &&
+			a->x == b->x &&
+			a->y == b->y &&
+			a->transform == b->transform &&
+			a->adaptive_sync == b->adaptive_sync);
+}
+
+bool head_apply_ignored(const struct Head * const head) {
+	return (head &&
+			head->applied &&
+			// an explicit reapply is always honoured
+			!head->reapply_required &&
+			head_state_equal(&head->cur, &head->applied_cur) &&
+			head_state_equal(&head->des, &head->applied_des));
 }
 
 bool head_current_mode_not_desired(const struct Head * const head) {

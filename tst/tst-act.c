@@ -252,6 +252,132 @@ static void act_apply__remainder(void **state) {
 	assert_logs_empty();
 }
 
+// A compositor may report a configuration as applied while changing nothing.
+// sway does this for a head whose output it has powered off: the head keeps
+// reporting itself disabled with no mode, so the desired state is never
+// reached. way-displays must not re-apply a configuration it has already
+// applied against unchanged state, or it spins -- measured at 1825
+// apply/success cycles per second against sway with an external display
+// blanked by swayidle's `output * power off`.
+static void act_apply__ignored_configuration_not_reapplied(void **state) {
+	struct zwlr_output_configuration_v1 *zconfig = (struct zwlr_output_configuration_v1*)"dummy3";
+	struct zwlr_output_configuration_head_v1 *zconfig_head = (struct zwlr_output_configuration_head_v1*)"dummy4";
+
+	struct Head *head = head_n("head");
+	head->cur.enabled = false;
+	head->des.enabled = true;
+	head->des.scale = 1;
+	ppmap_put(g_displ->heads, H0, head);
+
+	expect_ptr(__wrap_create_zwlr_output_config_listener, displ, g_displ);
+	will_return_ptr_type(__wrap_create_zwlr_output_config_listener, zconfig, struct zwlr_output_configuration_v1*);
+
+	expect_int_value(__wrap_print_head_map, t, INFO);
+	expect_int_value(__wrap_print_head_map, event, DELTA);
+	expect_ppmap(__wrap_print_head_map, heads, g_displ->heads);
+
+	expect_ptr(__wrap__zwlr_output_configuration_v1_enable_head, zwlr_output_configuration_v1, zconfig);
+	expect_ptr(__wrap__zwlr_output_configuration_v1_enable_head, head, H0);
+	will_return_ptr_type(__wrap__zwlr_output_configuration_v1_enable_head, zconfig_head, struct zwlr_output_configuration_head_v1*);
+
+	expect_ptr(__wrap__zwlr_output_configuration_head_v1_set_scale, zwlr_output_configuration_head_v1, zconfig_head);
+	expect_int_value(__wrap__zwlr_output_configuration_head_v1_set_scale, scale, 1);
+
+	expect_ptr(__wrap__zwlr_output_configuration_head_v1_set_position, zwlr_output_configuration_head_v1, zconfig_head);
+	expect_int_value(__wrap__zwlr_output_configuration_head_v1_set_position, x, 0);
+	expect_int_value(__wrap__zwlr_output_configuration_head_v1_set_position, y, 0);
+
+	expect_ptr(__wrap__zwlr_output_configuration_head_v1_set_transform, zwlr_output_configuration_head_v1, zconfig_head);
+	expect_int_value(__wrap__zwlr_output_configuration_head_v1_set_transform, transform, WL_OUTPUT_TRANSFORM_NORMAL);
+
+	expect_ptr(__wrap__zwlr_output_configuration_v1_apply, zwlr_output_configuration_v1, zconfig);
+
+	act_apply();
+
+	assert_int_equal(g_displ->state, OUTSTANDING);
+
+	displ_delta_destroy(g_displ);
+	g_displ->state = IDLE;
+
+	// The compositor reported success and left head->cur untouched. No further
+	// expectations are set, so any wayland call here fails the test.
+	act_apply();
+
+	assert_int_equal(g_displ->state, IDLE);
+	assert_nul(g_displ->delta.human);
+
+	assert_log(WARNING, "\nhead: configuration applied without effect, waiting for the display state to change\n");
+
+	// warned once, not once per event
+	act_apply();
+
+	assert_logs_empty();
+}
+
+// Once the compositor's reported state does change -- the output is powered
+// back on -- management must resume: the suppression above is not permanent.
+static void act_apply__resumes_when_current_changes(void **state) {
+	struct zwlr_output_configuration_v1 *zconfig = (struct zwlr_output_configuration_v1*)"dummy3";
+	struct zwlr_output_configuration_head_v1 *zconfig_head = (struct zwlr_output_configuration_head_v1*)"dummy4";
+
+	struct Head *head = head_n("head");
+	head->cur.enabled = false;
+	head->des.enabled = true;
+	head->des.scale = 1;
+	ppmap_put(g_displ->heads, H0, head);
+
+	expect_ptr(__wrap_create_zwlr_output_config_listener, displ, g_displ);
+	will_return_ptr_type(__wrap_create_zwlr_output_config_listener, zconfig, struct zwlr_output_configuration_v1*);
+	expect_int_value(__wrap_print_head_map, t, INFO);
+	expect_int_value(__wrap_print_head_map, event, DELTA);
+	expect_ppmap(__wrap_print_head_map, heads, g_displ->heads);
+	expect_ptr(__wrap__zwlr_output_configuration_v1_enable_head, zwlr_output_configuration_v1, zconfig);
+	expect_ptr(__wrap__zwlr_output_configuration_v1_enable_head, head, H0);
+	will_return_ptr_type(__wrap__zwlr_output_configuration_v1_enable_head, zconfig_head, struct zwlr_output_configuration_head_v1*);
+	expect_ptr(__wrap__zwlr_output_configuration_head_v1_set_scale, zwlr_output_configuration_head_v1, zconfig_head);
+	expect_int_value(__wrap__zwlr_output_configuration_head_v1_set_scale, scale, 1);
+	expect_ptr(__wrap__zwlr_output_configuration_head_v1_set_position, zwlr_output_configuration_head_v1, zconfig_head);
+	expect_int_value(__wrap__zwlr_output_configuration_head_v1_set_position, x, 0);
+	expect_int_value(__wrap__zwlr_output_configuration_head_v1_set_position, y, 0);
+	expect_ptr(__wrap__zwlr_output_configuration_head_v1_set_transform, zwlr_output_configuration_head_v1, zconfig_head);
+	expect_int_value(__wrap__zwlr_output_configuration_head_v1_set_transform, transform, WL_OUTPUT_TRANSFORM_NORMAL);
+	expect_ptr(__wrap__zwlr_output_configuration_v1_apply, zwlr_output_configuration_v1, zconfig);
+
+	act_apply();
+
+	displ_delta_destroy(g_displ);
+	g_displ->state = IDLE;
+
+	// output powers back on: the compositor now reports a different position,
+	// so the state we applied against is stale and the head is actionable again
+	head->cur.x = 100;
+
+	expect_ptr(__wrap_create_zwlr_output_config_listener, displ, g_displ);
+	will_return_ptr_type(__wrap_create_zwlr_output_config_listener, zconfig, struct zwlr_output_configuration_v1*);
+	expect_int_value(__wrap_print_head_map, t, INFO);
+	expect_int_value(__wrap_print_head_map, event, DELTA);
+	expect_ppmap(__wrap_print_head_map, heads, g_displ->heads);
+	expect_ptr(__wrap__zwlr_output_configuration_v1_enable_head, zwlr_output_configuration_v1, zconfig);
+	expect_ptr(__wrap__zwlr_output_configuration_v1_enable_head, head, H0);
+	will_return_ptr_type(__wrap__zwlr_output_configuration_v1_enable_head, zconfig_head, struct zwlr_output_configuration_head_v1*);
+	expect_ptr(__wrap__zwlr_output_configuration_head_v1_set_scale, zwlr_output_configuration_head_v1, zconfig_head);
+	expect_int_value(__wrap__zwlr_output_configuration_head_v1_set_scale, scale, 1);
+	expect_ptr(__wrap__zwlr_output_configuration_head_v1_set_position, zwlr_output_configuration_head_v1, zconfig_head);
+	expect_int_value(__wrap__zwlr_output_configuration_head_v1_set_position, x, 0);
+	expect_int_value(__wrap__zwlr_output_configuration_head_v1_set_position, y, 0);
+	expect_ptr(__wrap__zwlr_output_configuration_head_v1_set_transform, zwlr_output_configuration_head_v1, zconfig_head);
+	expect_int_value(__wrap__zwlr_output_configuration_head_v1_set_transform, transform, WL_OUTPUT_TRANSFORM_NORMAL);
+	expect_ptr(__wrap__zwlr_output_configuration_v1_apply, zwlr_output_configuration_v1, zconfig);
+
+	act_apply();
+
+	assert_int_equal(g_displ->state, OUTSTANDING);
+
+	displ_delta_destroy(g_displ);
+
+	assert_logs_empty();
+}
+
 static void act_handle_success__head_changing_adaptive_sync(void **state) {
 	struct Head *head = head_n("head");
 	head->des.adaptive_sync = ZWLR_OUTPUT_HEAD_V1_ADAPTIVE_SYNC_STATE_ENABLED;
@@ -465,6 +591,8 @@ int main(void) {
 		TEST_BA(act_apply__vrr),
 		TEST_BA(act_apply__disable),
 		TEST_BA(act_apply__remainder),
+		TEST_BA(act_apply__ignored_configuration_not_reapplied),
+		TEST_BA(act_apply__resumes_when_current_changes),
 
 		TEST_BA(act_handle_success__head_changing_adaptive_sync),
 		TEST_BA(act_handle_success__head_changing_adaptive_sync_fail),

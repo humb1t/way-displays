@@ -53,6 +53,14 @@ struct Head {
 	bool adaptive_sync_failed;
 	bool warned_no_preferred;
 	bool warned_no_mode;
+	bool warned_apply_ignored;
+
+	// state the most recent output configuration was applied against, used to
+	// detect a compositor that reports a configuration as applied while
+	// changing nothing
+	bool applied;
+	struct HeadState applied_cur;
+	struct HeadState applied_des;
 };
 
 /*
@@ -90,6 +98,10 @@ void head_set_mode_pref(struct Head * const head, const struct zwlr_output_mode_
 
 // clear current and failed modes, flag for reapply
 void heads_reapply(const struct PPmap *heads);
+
+// record the current and desired state an output configuration was applied
+// against, clearing any ignored-configuration warning
+void head_applied(struct Head * const head);
 
 /*
  * string rendering
@@ -132,6 +144,10 @@ bool head_current_adaptive_sync_not_desired(const struct Head * const head);
 
 // fn_pred_p: full reapply next layout
 bool head_reapply_required(const struct Head * const head);
+
+// fn_pred_p: an identical configuration has already been applied against this
+// same current and desired state, i.e. the compositor ignored it
+bool head_apply_ignored(const struct Head * const head);
 
 /*
  * utility
